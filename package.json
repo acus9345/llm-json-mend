@@ -1,6 +1,6 @@
 {
   "name": "llm-json-mend",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Repair broken, partial, or markdown-fenced JSON from LLM output and validate it against Zod or any Standard Schema. Zero dependencies.",
   "keywords": [
     "json",
