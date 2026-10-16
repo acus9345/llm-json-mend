@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, expectTypeOf, it } from "vitest";
 import { z } from "zod";
 import {
   JsonMendError,
@@ -6,9 +6,11 @@ import {
   parseJson,
   parsePartial,
   parseWithSchema,
+  parseWithSchemaAsync,
   repairJson,
   safeParseJson,
   safeParseWithSchema,
+  safeParseWithSchemaAsync,
   type StandardSchemaV1,
 } from "../src/index.js";
 
@@ -124,7 +126,49 @@ describe("repairJson", () => {
 
 describe("extractJsonText", () => {
   it("prefers a fenced block", () => {
-    expect(extractJsonText("x {no} ```json\n[1]\n``` y")).toBe("[1]\n");
+    expect(extractJsonText("x {no} ```json\n[1]\n``` y")).toBe("[1]");
+  });
+
+  it("returns the span of the most JSON-like value", () => {
+    expect(extractJsonText('See [1] below: {"a": 1} thanks')).toBe('{"a": 1}');
+  });
+});
+
+describe("real model replies", () => {
+  it.each([
+    ["brackets in prose before the JSON", 'Sure [as requested], here it is: {"a": 1}', { a: 1 }],
+    ["braces in prose before the JSON", 'I used {placeholders}. Result:\n{"name": "x"}', { name: "x" }],
+    ["thinking tags with braces", "<thinking>maybe {x}?</thinking>\n{\"a\": 1}", { a: 1 }],
+    ["<json> tags", '<json>\n{"a": 1}\n</json>', { a: 1 }],
+    ["a non-JSON fence first", "```bash\nnpm i\n```\nOutput:\n```json\n{\"ok\": true}\n```", { ok: true }],
+    ["a code fence with braces first", "```js\nconst x = {a}\n```\n```json\n{\"ok\": true}\n```", { ok: true }],
+    ["an untagged fence", "```\n{'ok': True}\n```", { ok: true }],
+    ["inner quote then comma", '{"q": "He said "hi", then left"}', { q: 'He said "hi", then left' }],
+    ["bare values after a quoted one", '["x", y, "z"]', ["x", "y", "z"]],
+    ["CRLF newlines", '{\r\n  "a": 1,\r\n}', { a: 1 }],
+    ["URLs inside strings", '{"u": "https://x.com/a", "b": 1,}', { u: "https://x.com/a", b: 1 }],
+    ["# in unquoted values", "{color: #fff, n: 1}", { color: "#fff", n: 1 }],
+    ["... placeholders", '{"items": [1, 2, ...], ...}', { items: [1, 2] }],
+    ["… placeholders", '["a", …]', ["a"]],
+    ["a JS assignment", "const data = {a: 1, b: 'two'};", { a: 1, b: "two" }],
+    ["unquoted keys with spaces", "{first name: 'Ada'}", { "first name": "Ada" }],
+    ["a numbered list before the JSON", '1. step one\n2. step two\n\n{"done": true}', { done: true }],
+    ["an apostrophe in a single-quoted value", "{'msg': 'it's fine'}", { msg: "it's fine" }],
+    ["a double-encoded JSON string", '"{\\"a\\": 1}"', '{"a": 1}'],
+  ])("handles %s", (_name, input, expected) => {
+    expect(parseJson(input)).toEqual(expected);
+  });
+
+  it("gets past many brackets in prose", () => {
+    const reply = "Checklist: " + "[x] done {step}. ".repeat(50) + '\n{"items": [1, 2],}';
+    expect(parseJson(reply)).toEqual({ items: [1, 2] });
+  });
+
+  it("says what it was given when there is no JSON", () => {
+    expect(() => parseJson("I'm sorry, I can't help with that request today.")).toThrow(
+      /No JSON value found in input: "I'm sorry, I can't help/,
+    );
+    expect(() => parseJson("")).toThrow("(empty string)");
   });
 });
 
@@ -181,7 +225,23 @@ describe("schemas", () => {
     const Async: StandardSchemaV1<number> = {
       "~standard": { version: 1, validate: async (v) => ({ value: v as number }) },
     };
-    expect(() => parseWithSchema("1", Async)).toThrow(TypeError);
+    expect(() => parseWithSchema("1", Async)).toThrow(/parseWithSchemaAsync/);
+  });
+
+  it("validates async schemas with the async variants", async () => {
+    const Name = z.object({ name: z.string().refine(async (n) => n.length > 1, "too short") });
+    await expect(parseWithSchemaAsync("{name: 'Ada'}", Name)).resolves.toEqual({ name: "Ada" });
+    await expect(parseWithSchemaAsync("{name: 'A'}", Name)).rejects.toThrow("name: too short");
+    const result = await safeParseWithSchemaAsync("nothing", Name);
+    expect(result.success).toBe(false);
+  });
+
+  it("types partial values as deep partials", () => {
+    const value = parsePartial<{ user: { name: string }; tags: string[] }>('{"user": {');
+    expectTypeOf(value).toEqualTypeOf<
+      { user?: { name?: string }; tags?: string[] } | undefined
+    >();
+    expect(value).toEqual({ user: {} });
   });
 });
 

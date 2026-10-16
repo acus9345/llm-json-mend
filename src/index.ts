@@ -25,6 +25,16 @@ type StandardResult<T> =
 /** Zod 3/4, Valibot, ArkType, or anything else with `safeParse` or `~standard`. */
 export type Schema<T> = SafeParseSchema<T> | StandardSchemaV1<T>;
 
+/**
+ * What a value of type `T` can look like while its JSON is still streaming in:
+ * every property may be missing and array elements may be incomplete.
+ */
+export type DeepPartial<T> = T extends (infer U)[]
+  ? DeepPartial<U>[]
+  : T extends object
+    ? { [K in keyof T]?: DeepPartial<T[K]> }
+    : T;
+
 export type SafeResult<T> =
   | { success: true; data: T; repaired: boolean }
   | { success: false; error: JsonMendError };
@@ -63,8 +73,8 @@ export function repairJson(text: string, space?: number | string): string {
  *
  * Incomplete keys and literals (`{"ok": tr`) are dropped, and incomplete strings are kept.
  */
-export function parsePartial<T = unknown>(text: string): T | undefined {
-  const result = safeParseJson<T>(text);
+export function parsePartial<T = unknown>(text: string): DeepPartial<T> | undefined {
+  const result = safeParseJson<DeepPartial<T>>(text);
   return result.success ? result.data : undefined;
 }
 
@@ -84,24 +94,62 @@ export function parseWithSchema<T>(text: string, schema: Schema<T>): T {
 export function safeParseWithSchema<T>(text: string, schema: Schema<T>): SafeResult<T> {
   const parsed = safeParseJson(text);
   if (!parsed.success) return parsed;
+  const result = validate(schema, parsed.data, false);
+  if (result instanceof Promise) {
+    throw new TypeError(
+      "This schema validates asynchronously; use parseWithSchemaAsync or safeParseWithSchemaAsync",
+    );
+  }
+  return toResult(result, parsed.repaired);
+}
 
+/** Like {@link parseWithSchema}, for schemas with async refinements or transforms. */
+export async function parseWithSchemaAsync<T>(text: string, schema: Schema<T>): Promise<T> {
+  const result = await safeParseWithSchemaAsync(text, schema);
+  if (!result.success) throw result.error;
+  return result.data;
+}
+
+/** Like {@link safeParseWithSchema}, for schemas with async refinements or transforms. */
+export async function safeParseWithSchemaAsync<T>(
+  text: string,
+  schema: Schema<T>,
+): Promise<SafeResult<T>> {
+  const parsed = safeParseJson(text);
+  if (!parsed.success) return parsed;
+  return toResult(await validate(schema, parsed.data, true), parsed.repaired);
+}
+
+type Validation<T> = { ok: true; value: T } | { ok: false; issues: readonly unknown[] };
+
+function validate<T>(
+  schema: Schema<T>,
+  data: unknown,
+  allowAsync: boolean,
+): Validation<T> | Promise<Validation<T>> {
   if ("~standard" in schema) {
-    const result = schema["~standard"].validate(parsed.data);
-    if (result instanceof Promise) {
-      throw new TypeError("Async schemas are not supported; validate the parsed value yourself");
-    }
-    if (result.issues) {
-      return { success: false, error: validationError(result.issues) };
-    }
-    return { success: true, data: result.value, repaired: parsed.repaired };
+    const result = schema["~standard"].validate(data);
+    const finish = (r: StandardResult<T>): Validation<T> =>
+      r.issues ? { ok: false, issues: r.issues } : { ok: true, value: r.value };
+    return result instanceof Promise ? result.then(finish) : finish(result);
   }
+  const zodLike = schema as SafeParseSchema<T> & {
+    safeParseAsync?: (data: unknown) => Promise<ReturnType<SafeParseSchema<T>["safeParse"]>>;
+  };
+  const finish = (r: ReturnType<SafeParseSchema<T>["safeParse"]>): Validation<T> => {
+    if (r.success) return { ok: true, value: r.data };
+    const issues = (r.error as { issues?: readonly unknown[] } | undefined)?.issues;
+    return { ok: false, issues: issues ?? [r.error] };
+  };
+  return allowAsync && zodLike.safeParseAsync
+    ? zodLike.safeParseAsync(data).then(finish)
+    : finish(schema.safeParse(data));
+}
 
-  const result = schema.safeParse(parsed.data);
-  if (!result.success) {
-    const issues = (result.error as { issues?: readonly unknown[] } | undefined)?.issues;
-    return { success: false, error: validationError(issues ?? [result.error]) };
-  }
-  return { success: true, data: result.data, repaired: parsed.repaired };
+function toResult<T>(result: Validation<T>, repaired: boolean): SafeResult<T> {
+  return result.ok
+    ? { success: true, data: result.value, repaired }
+    : { success: false, error: validationError(result.issues) };
 }
 
 function validationError(issues: readonly unknown[]): JsonMendError {
