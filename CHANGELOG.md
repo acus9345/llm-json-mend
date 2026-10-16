@@ -1,8 +1,12 @@
 # Changelog
 
-## 0.2.1
+## 0.2.2
 
 - No library changes. First release published from GitHub Actions with npm trusted publishing, so it carries a provenance attestation that links it to the exact commit and workflow that built it.
+
+## 0.2.1
+
+- Tagged on GitHub but never published to npm: the first trusted-publishing attempt was rejected. 0.2.2 is the same code.
 
 ## 0.2.0
 

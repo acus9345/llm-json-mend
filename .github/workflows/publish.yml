@@ -34,4 +34,19 @@ jobs:
             echo "::error::Release tag $GITHUB_REF_NAME does not match package.json ($expected)"
             exit 1
           fi
-      - run: npm publish # prepublishOnly runs the full check first
+      # Diagnostics for trusted publishing: prints the identity claims npm matches
+      # against the trusted publisher entry. The token itself is never printed.
+      - name: Show OIDC claims
+        run: |
+          node -e '
+            const url = new URL(process.env.ACTIONS_ID_TOKEN_REQUEST_URL);
+            url.searchParams.set("audience", "npm:registry.npmjs.org");
+            fetch(url, { headers: { Authorization: `Bearer ${process.env.ACTIONS_ID_TOKEN_REQUEST_TOKEN}` } })
+              .then((r) => r.json())
+              .then(({ value }) => {
+                const claims = JSON.parse(Buffer.from(value.split(".")[1], "base64url"));
+                const keys = ["aud", "repository", "repository_owner", "workflow_ref", "job_workflow_ref", "ref", "event_name", "environment", "sub"];
+                for (const k of keys) console.log(`${k}: ${claims[k]}`);
+              });
+          '
+      - run: npm publish --loglevel verbose # prepublishOnly runs the full check first
