@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.2.1
+
+- No library changes. First release published from GitHub Actions with npm trusted publishing, so it carries a provenance attestation that links it to the exact commit and workflow that built it.
+
 ## 0.2.0
 
 - Finds the JSON even when the prose before it has its own brackets or braces (`<thinking>maybe {x}</thinking>`, `[note]`, checklists).
