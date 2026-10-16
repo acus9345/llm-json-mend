@@ -27,5 +27,6 @@ The workflow fails without publishing if the release tag doesn't match the versi
 
 ## Troubleshooting
 
-- **`ENEEDAUTH` / 404 on publish:** the trusted publisher on npm must name exactly `acus9345/llm-json-mend`, `publish.yml`, and environment `npm`. Check with `npm trust list llm-json-mend`.
+- **First publish deadline:** a new trusted publisher must complete one successful publish within 2 days, or npm expires it. Then delete it and create it again.
+- **`ENEEDAUTH` / 403 / 404 on publish:** on npmjs.com, the trusted publisher must have **npm publish** ticked under *Allowed actions*. New ones only allow `npm stage publish` by default. It must also name exactly `acus9345/llm-json-mend`, `publish.yml`, and environment `npm`. Check with `npm trust list llm-json-mend`.
 - **Don't add an `NPM_TOKEN` secret.** It isn't needed, and npm may use it instead of trusted publishing.
