@@ -1,0 +1,70 @@
+{
+  "name": "llm-json-mend",
+  "version": "0.1.0",
+  "description": "Repair broken, partial, or markdown-fenced JSON from LLM output and validate it against Zod or any Standard Schema. Zero dependencies.",
+  "keywords": [
+    "json",
+    "repair",
+    "llm",
+    "ai",
+    "agent",
+    "partial-json",
+    "streaming",
+    "zod",
+    "standard-schema",
+    "structured-output"
+  ],
+  "homepage": "https://github.com/acus9345/llm-json-mend#readme",
+  "bugs": {
+    "url": "https://github.com/acus9345/llm-json-mend/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/acus9345/llm-json-mend.git"
+  },
+  "license": "MIT",
+  "author": "acus9345 <acus9345@gmail.com>",
+  "type": "module",
+  "sideEffects": false,
+  "exports": {
+    ".": {
+      "import": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
+      },
+      "require": {
+        "types": "./dist/index.d.cts",
+        "default": "./dist/index.cjs"
+      }
+    },
+    "./package.json": "./package.json"
+  },
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "files": [
+    "dist"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "build": "tsup",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint .",
+    "check": "npm run typecheck && npm run lint && npm test && npm run build && publint",
+    "prepublishOnly": "npm run check"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@types/node": "^26.6.5",
+    "eslint": "^10.12.0",
+    "publint": "^0.3.25",
+    "tsup": "^9.0.0",
+    "typescript": "^6.0.3",
+    "typescript-eslint": "^8.71.2",
+    "vitest": "^5.0.5",
+    "zod": "^4.6.7"
+  }
+}
