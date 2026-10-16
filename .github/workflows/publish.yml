@@ -1,0 +1,36 @@
+name: Publish
+
+# Publishes to npm with trusted publishing (OIDC): no npm token is stored anywhere.
+# Runs when a GitHub release is published, and waits for approval on the "npm" environment.
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+  id-token: write # lets the job get the short-lived identity token npm trusts
+
+concurrency:
+  group: publish
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    environment: npm
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24 # ships npm 11, which supports trusted publishing
+          registry-url: https://registry.npmjs.org
+      - run: npm ci
+      - name: Tag must match package.json version
+        run: |
+          expected="v$(node -p "require('./package.json').version")"
+          if [ "$expected" != "$GITHUB_REF_NAME" ]; then
+            echo "::error::Release tag $GITHUB_REF_NAME does not match package.json ($expected)"
+            exit 1
+          fi
+      - run: npm publish # prepublishOnly runs the full check first
