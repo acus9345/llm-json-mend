@@ -70,13 +70,18 @@ describe("parseJson", () => {
   it("throws JsonMendError when there is no JSON", () => {
     expect(() => parseJson("")).toThrow(JsonMendError);
     expect(() => parseJson("I could not find any data, sorry.")).toThrow(JsonMendError);
+    expect(() => parseJson("```json\nSorry, no data.\n```")).toThrow(JsonMendError);
+    expect(() => parseJson("1. step one\n2. step two")).toThrow(JsonMendError);
+    expect(() => parseJson("true\nSorry, I cannot help with that.")).toThrow(JsonMendError);
     const result = safeParseJson("   ");
     expect(result.success).toBe(false);
   });
 
   it("parses bare scalars", () => {
     expect(parseJson("'hi'")).toBe("hi");
+    expect(parseJson("`hi`")).toBe("hi");
     expect(parseJson("True")).toBe(true);
+    expect(parseJson("42 // the answer")).toBe(42);
   });
 });
 
@@ -99,13 +104,19 @@ describe("truncated / streaming input", () => {
   it("returns undefined before anything parseable arrives", () => {
     expect(parsePartial("")).toBeUndefined();
     expect(parsePartial("Here is")).toBeUndefined();
+    expect(parsePartial("`")).toBeUndefined();
+    expect(parsePartial("``")).toBeUndefined();
+    expect(parsePartial("```")).toBeUndefined();
+    expect(parsePartial("```json\n")).toBeUndefined();
   });
 
   it("produces a growing value for every prefix of a stream", () => {
     const full = '```json\n{"title": "Report", "tags": ["a", "b"], "score": 9.5, "done": false}\n```';
+    const jsonStart = full.indexOf("{");
     let last: unknown;
     for (let i = 1; i <= full.length; i++) {
       const value = parsePartial(full.slice(0, i));
+      if (i <= jsonStart) expect(value).toBeUndefined();
       if (value !== undefined) last = value;
     }
     expect(last).toEqual({ title: "Report", tags: ["a", "b"], score: 9.5, done: false });
@@ -132,18 +143,30 @@ describe("extractJsonText", () => {
   it("returns the span of the most JSON-like value", () => {
     expect(extractJsonText('See [1] below: {"a": 1} thanks')).toBe('{"a": 1}');
   });
+
+  it("returns an empty string when there is no JSON", () => {
+    expect(extractJsonText("I cannot help with that.")).toBe("");
+    expect(extractJsonText("```json\nSorry\n```")).toBe("");
+  });
 });
 
 describe("real model replies", () => {
   it.each([
     ["brackets in prose before the JSON", 'Sure [as requested], here it is: {"a": 1}', { a: 1 }],
     ["braces in prose before the JSON", 'I used {placeholders}. Result:\n{"name": "x"}', { name: "x" }],
+    ["unclosed prose brace before the JSON", 'I used {placeholders\n{"a": 1, "b": 2}', { a: 1, b: 2 }],
     ["thinking tags with braces", "<thinking>maybe {x}?</thinking>\n{\"a\": 1}", { a: 1 }],
     ["<json> tags", '<json>\n{"a": 1}\n</json>', { a: 1 }],
     ["a non-JSON fence first", "```bash\nnpm i\n```\nOutput:\n```json\n{\"ok\": true}\n```", { ok: true }],
     ["a code fence with braces first", "```js\nconst x = {a}\n```\n```json\n{\"ok\": true}\n```", { ok: true }],
+    ["a space before the json fence tag", "```js\nconst x = {a}\n```\n``` json\n{\"ok\": true}\n```", { ok: true }],
+    ["a four-backtick fence containing triple backticks", '````json\n{"md": "```js\\nhi\\n```"}\n````', { md: "```js\nhi\n```" }],
+    ["a tilde fence", '~~~json\n{"ok": true}\n~~~', { ok: true }],
     ["an untagged fence", "```\n{'ok': True}\n```", { ok: true }],
     ["inner quote then comma", '{"q": "He said "hi", then left"}', { q: 'He said "hi", then left' }],
+    ["inner quote then comma before missing comma newline", '{\n  "q": "He said "hi", then left"\n  "a": 1\n}', { q: 'He said "hi", then left', a: 1 }],
+    ["inline comments after literals and bare keys", '{\n  "ok": true // done\n  flag: True # py\n  name /* note */: "Ada",\n  extra: false /* end */,\n}', { ok: true, flag: true, name: "Ada", extra: false }],
+    ["mismatched ] after key colon inside an array", '{"items": [{"a": ], "other": 2}', { items: [{}], other: 2 }],
     ["bare values after a quoted one", '["x", y, "z"]', ["x", "y", "z"]],
     ["CRLF newlines", '{\r\n  "a": 1,\r\n}', { a: 1 }],
     ["URLs inside strings", '{"u": "https://x.com/a", "b": 1,}', { u: "https://x.com/a", b: 1 }],

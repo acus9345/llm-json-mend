@@ -68,7 +68,9 @@ export class JsonMendError extends Error {
  */
 function fenceContent(text: string): string | undefined {
   let fallback: string | undefined;
-  for (const [, lang = "", body = ""] of text.matchAll(/```([\w-]*)[^\S\n]*\n?([\s\S]*?)(?:```|$)/g)) {
+  for (const [, , lang = "", body = ""] of text.matchAll(
+    /(`{3,}|~{3,})(?:[^\S\n]*([\w-]+))?[^\S\n]*\n?([\s\S]*?)(?:\1|$)/g,
+  )) {
     if (!/[[{]/.test(body)) continue;
     if (/^json/i.test(lang)) return body;
     fallback ??= body;
@@ -118,12 +120,22 @@ function locate(text: string): Located {
   }
   if (best) return best;
 
-  // No brackets: a bare scalar like `"hi"` or `true`. Plain prose is not JSON.
+  // No brackets: a bare scalar like `"hi"` or `true`. Plain prose or a fence prefix is not JSON.
   const trimmed = source.trim();
+  if (trimmed === "`" || trimmed.startsWith("``")) {
+    return { source: trimmed, start: 0, end: 0, value: MISSING };
+  }
   const parser = new Parser(trimmed, 0);
   let value = parser.parseTop();
-  if (typeof value === "string" && !((trimmed[0] ?? "") in QUOTES)) value = MISSING;
-  return { source: trimmed, start: 0, end: parser.index, value };
+  const end = parser.index;
+  parser.skipWs();
+  if (
+    !parser.atEnd ||
+    (typeof value === "string" && !((trimmed[0] ?? "") in QUOTES))
+  ) {
+    value = MISSING;
+  }
+  return { source: trimmed, start: 0, end, value };
 }
 
 /**
@@ -131,8 +143,11 @@ function locate(text: string): Located {
  * JSON-like `{...}` / `[...]`, looking inside a code fence if there is one.
  */
 export function extractJsonText(text: string): string {
-  const { source, start, end } = locate(text);
-  return source.slice(start, end);
+  if (typeof text !== "string") {
+    throw new JsonMendError(`Expected a string, got ${typeof text}`);
+  }
+  const { source, start, end, value } = locate(text);
+  return value === MISSING || value === SKIP ? "" : source.slice(start, end);
 }
 
 /** Like `obj[key] = value`, but a `"__proto__"` key stays a plain property, as with JSON.parse. */
@@ -158,6 +173,10 @@ class Parser {
     return this.i;
   }
 
+  get atEnd(): boolean {
+    return this.eof;
+  }
+
   parseTop(): Parsed {
     this.skipWs();
     const value = this.parseValue();
@@ -172,7 +191,14 @@ class Parser {
     return this.s[this.i + offset] ?? "";
   }
 
-  private skipWs(): void {
+  private atTokenComment(start: number): boolean {
+    const c = this.peek();
+    if (c === "/" && (this.peek(1) === "/" || this.peek(1) === "*")) return true;
+    const afterWs = this.i > start && WHITESPACE.has(this.s[this.i - 1] ?? "");
+    return afterWs && c === "#" && /^[\s#]?$/.test(this.peek(1));
+  }
+
+  skipWs(): void {
     while (!this.eof) {
       const c = this.peek();
       if (WHITESPACE.has(c)) {
@@ -225,12 +251,14 @@ class Parser {
         continue;
       }
       this.skipWs();
-      if (this.peek() === ":") this.i++;
+      const hasColon = this.peek() === ":";
+      if (hasColon) this.i++;
       this.skipWs();
-      if (this.peek() === "," || this.peek() === "}") {
+      if (this.peek() === "," || this.peek() === "}" || this.peek() === "]") {
         if (!ELLIPSES.includes(String(key))) this.weak++; // key with no value
         continue;
       }
+      if (!hasColon && !this.eof && !(c in QUOTES)) this.weak++;
       const value = this.parseValue();
       if (value === MISSING) return out;
       if (value === SKIP) continue;
@@ -262,7 +290,9 @@ class Parser {
 
   private parseBareKey(): Parsed {
     const start = this.i;
-    while (!this.eof && !/[:,{}[\]\n"'`]/.test(this.peek())) this.i++;
+    while (!this.eof && !/[:,{}[\]\n"'`]/.test(this.peek()) && !this.atTokenComment(start)) {
+      this.i++;
+    }
     const key = this.s.slice(start, this.i).trim();
     if (key === "") {
       this.i = Math.max(this.i, start + 1); // skip an unexpected character rather than loop forever
@@ -311,11 +341,23 @@ class Parser {
   private isStringEnd(close: string): boolean {
     let j = this.i + 1;
     while (j < this.s.length && WHITESPACE.has(this.s[j] ?? "")) j++;
+    if (this.s[j] === ",") return !this.isQuotedClause(j, close);
+    return this.isValueBoundary(this.i + 1, j);
+  }
+
+  private isValueBoundary(from: number, wsEnd?: number): boolean {
+    let j = wsEnd ?? from;
+    if (wsEnd === undefined) {
+      while (j < this.s.length && WHITESPACE.has(this.s[j] ?? "")) j++;
+    }
     const next = this.s[j] ?? "";
-    if (next === ",") return !this.isQuotedClause(j, close);
-    if (next === "" || VALUE_TERMINATORS.has(next)) return true;
-    // A newline after the quote usually means a missing comma.
-    return /\n/.test(this.s.slice(this.i + 1, j)) || next === "/" || next === "#";
+    return (
+      next === "" ||
+      VALUE_TERMINATORS.has(next) ||
+      /\n/.test(this.s.slice(from, j)) ||
+      next === "/" ||
+      next === "#"
+    );
   }
 
   /**
@@ -328,8 +370,7 @@ class Parser {
       this.s.slice(comma, comma + 200),
     );
     if (clause?.[2] !== close || LITERALS.has((clause[1] ?? "").trim())) return false;
-    const after = this.s.slice(comma + clause[0].length).trimStart()[0] ?? "";
-    return after === "" || VALUE_TERMINATORS.has(after);
+    return this.isValueBoundary(comma + clause[0].length);
   }
 
   private parseNumber(): Parsed {
@@ -354,7 +395,9 @@ class Parser {
 
   private parseWord(): Parsed {
     const start = this.i;
-    while (!this.eof && !/[,:{}[\]\n]/.test(this.peek())) this.i++;
+    while (!this.eof && !/[,:{}[\]\n]/.test(this.peek()) && !this.atTokenComment(start)) {
+      this.i++;
+    }
     const word = this.s.slice(start, this.i).trim();
     if (word === "") {
       this.i = Math.max(this.i, start + 1);
